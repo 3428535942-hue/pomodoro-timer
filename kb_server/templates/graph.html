@@ -1,0 +1,347 @@
+{% extends "base.html" %}
+{% block title %}知识图谱 — {{ kb_title }}{% endblock %}
+{% block head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+<style>
+    .graph-wrapper { position: relative; width: 100%; height: 70vh; }
+    .graph-wrapper canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; border-radius: 20px; }
+    #cy { width: 100%; height: 100%; border: 1px solid rgba(0,0,0,0.05); border-radius: 20px; background: transparent; cursor: grab; z-index: 2; position: relative; }
+    #cy:active { cursor: grabbing; }
+    @media (prefers-reduced-motion: reduce) { .graph-wrapper canvas { display: none; } }
+
+    /* Hover tooltip card */
+    #node-tooltip {
+        position: absolute; z-index: 10; pointer-events: none;
+        background: rgba(255,255,255,0.95); backdrop-filter: blur(12px);
+        border: 1px solid rgba(0,0,0,0.08); border-radius: 14px;
+        padding: 0.75rem 1rem; font-family: 'Inter', sans-serif;
+        font-size: 0.8rem; box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+        opacity: 0; transform: translateY(4px);
+        transition: opacity 150ms, transform 150ms; max-width: 220px;
+    }
+    #node-tooltip.visible { opacity: 1; transform: translateY(0); }
+    #node-tooltip .tt-type { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 12px; font-size: 0.65rem; font-weight: 600; text-transform: uppercase; margin-bottom: 0.3rem; }
+    #node-tooltip .tt-label { font-weight: 700; color: #1e293b; margin-bottom: 0.2rem; }
+    #node-tooltip .tt-summary { color: #64748b; font-size: 0.75rem; line-height: 1.4; }
+    #node-tooltip .tt-meta { color: #94a3b8; font-size: 0.7rem; margin-top: 0.3rem; }
+
+    /* Search box */
+    #graph-search { display: flex; gap: 0.5rem; align-items: center; }
+    #graph-search input { padding: 0.4rem 0.75rem; border: 1px solid rgba(0,0,0,0.08); border-radius: 20px; font-size: 0.8rem; font-family: 'Inter',sans-serif; outline: none; width: 160px; transition: all 200ms; }
+    #graph-search input:focus { border-color: #4f46e5; box-shadow: 0 0 0 3px rgba(79,70,229,0.12); }
+    #graph-search .search-hint { font-size: 0.7rem; color: #94a3b8; }
+    .match-indicator { font-size: 0.75rem; color: #4f46e5; display: none; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:0.5rem">
+    <h2 style="font-size:1.4rem;font-weight:700;letter-spacing:-0.3px;margin:0">知识图谱</h2>
+    <div id="graph-search">
+        <span class="match-indicator" id="match-indicator"></span>
+        <input type="text" id="search-input" placeholder="搜索定位节点…">
+        <span class="search-hint">回车跳转</span>
+    </div>
+    <span id="stats" style="color:var(--color-text-muted);font-size:0.85rem">加载中…</span>
+</div>
+<p style="color:var(--color-text-muted);font-size:0.85rem;margin-bottom:1rem">悬停节点高亮关联 · 点击节点跳转页面 · 拖拽探索结构</p>
+
+<div class="graph-wrapper" id="graph-wrapper">
+    <canvas id="particle-canvas"></canvas>
+    <canvas id="fx-canvas"></canvas>
+    <div id="cy"></div>
+    <div id="node-tooltip"></div>
+</div>
+
+<div style="display:flex;gap:2rem;margin-top:1rem;flex-wrap:wrap;align-items:center">
+    <span>🟢 主题</span><span>🔵 概念</span><span>⚫ 原始</span><span>⚪ 其他</span>
+    <span style="opacity:0.4;font-size:0.75rem">· 节点越大 = 关联越多 = 越重要</span>
+</div>
+
+<script>
+const COLORS = { topic: '#4CAF50', atom: '#2196F3', raw: '#9E9E9E', other: '#BDBDBD' };
+const TYPE_NAMES = { topic: '主题', atom: '概念', raw: '原始', other: '其他' };
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const tooltip = document.getElementById('node-tooltip');
+
+fetch('/api/graph')
+  .then(r => r.json())
+  .then(data => {
+    if (!data.nodes.length) {
+      document.getElementById('cy').innerHTML = '<div class="empty-state" style="height:50vh"><div class="illustration">🗺️</div><h3>暂无图谱数据</h3><p>收录资料后 wikilink 会自动形成知识网络</p></div>';
+      document.getElementById('stats').textContent = '0 节点 · 0 边';
+      return;
+    }
+
+    // Compute max degree for sizing
+    const maxDegree = Math.max(1, ...data.nodes.map(n => n.data.degree));
+
+    // Build elements with tiered sizing
+    const elements = [];
+    const nodeDataMap = {};
+    data.nodes.forEach(n => {
+      const d = n.data;
+      nodeDataMap[d.id] = d;
+      // Tier: hub (>60% max) = large, medium (>25%) = normal, leaf = small
+      const ratio = d.degree / maxDegree;
+      const baseSize = ratio > 0.6 ? 42 : ratio > 0.25 ? 32 : 24;
+      elements.push({
+        data: { id: d.id, label: d.label, type: d.type, url: d.url, summary: d.summary, degree: d.degree },
+        style: {
+          'background-color': COLORS[d.type] || COLORS.other,
+          width: baseSize, height: baseSize,
+        }
+      });
+    });
+    data.edges.forEach(e => {
+      elements.push({
+        data: { id: e.data.id, source: e.data.source, target: e.data.target },
+        style: { 'line-color': '#e2e8f0', 'target-arrow-color': '#cbd5e1', 'target-arrow-shape': 'triangle', width: 1.5 }
+      });
+    });
+
+    const cy = cytoscape({
+      container: document.getElementById('cy'),
+      elements: elements,
+      style: [
+        { selector: 'node', style: {
+          label: 'data(label)', 'text-valign': 'center', 'text-halign': 'center',
+          'font-size': '10px', 'font-family': 'Inter, sans-serif', color: '#334155',
+          'text-wrap': 'wrap', 'text-max-width': '80px',
+          'transition-property': 'width,height,opacity,border-width',
+          'transition-duration': '200ms',
+        }},
+        { selector: 'node.dimmed', style: { opacity: 0.15 } },
+        { selector: 'node.highlighted', style: { 'border-width': 1.5, 'border-color': '#4f46e5', 'border-opacity': 0.6 } },
+        { selector: 'edge', style: { 'curve-style': 'bezier', 'transition-property': 'opacity,line-color,width', 'transition-duration': '200ms' }},
+        { selector: 'edge.dimmed', style: { opacity: 0.05, width: 0.5 } },
+        { selector: 'edge.highlighted', style: { 'line-color': '#818cf8', opacity: 0.7, width: 2 } },
+      ],
+      layout: { name: 'cose', animate: !REDUCED_MOTION, animationDuration: 800, padding: 60 },
+    });
+
+    document.getElementById('stats').textContent = `节点 ${data.nodes.length} · 边 ${data.edges.length}`;
+
+    // === Neighbourhood Highlight on Hover ===
+    let hoveredNode = null;
+    cy.on('mouseover', 'node', evt => {
+      const node = evt.target;
+      if (hoveredNode === node.id()) return;
+      hoveredNode = node.id();
+      const neighborhood = node.closedNeighborhood();
+      cy.elements().difference(neighborhood).addClass('dimmed');
+      neighborhood.nodes().addClass('highlighted');
+      neighborhood.edges().addClass('highlighted');
+    });
+    cy.on('mouseout', 'node', () => {
+      hoveredNode = null;
+      cy.elements().removeClass('dimmed highlighted');
+    });
+
+    // === Hover Tooltip Card ===
+    cy.on('mousemove', 'node', evt => {
+      const d = evt.target.data();
+      const typeColor = COLORS[d.type] || COLORS.other;
+      tooltip.innerHTML = `
+        <span class="tt-type" style="background:${typeColor}20;color:${typeColor}">${TYPE_NAMES[d.type] || d.type}</span>
+        <div class="tt-label">${d.label}</div>
+        ${d.summary ? `<div class="tt-summary">${d.summary.substring(0, 100)}${d.summary.length > 100 ? '…' : ''}</div>` : ''}
+        <div class="tt-meta">${d.degree} 个关联 · 点击跳转</div>`;
+      tooltip.classList.add('visible');
+      // Position tooltip near cursor but within wrapper
+      const rect = document.getElementById('graph-wrapper').getBoundingClientRect();
+      let left = evt.originalEvent.clientX - rect.left + 16;
+      let top = evt.originalEvent.clientY - rect.top - 10;
+      if (left + 220 > rect.width) left = evt.originalEvent.clientX - rect.left - 230;
+      if (top + 120 > rect.height) top = evt.originalEvent.clientY - rect.top - 130;
+      tooltip.style.left = left + 'px';
+      tooltip.style.top = top + 'px';
+    });
+    cy.on('mouseout', 'node', () => { tooltip.classList.remove('visible'); });
+
+    // === Search / Filter ===
+    const searchInput = document.getElementById('search-input');
+    const matchIndicator = document.getElementById('match-indicator');
+    let matchIndex = 0, matchNodes = [];
+
+    function clearSearch() {
+      cy.nodes().removeClass('dimmed highlighted');
+      cy.edges().removeClass('dimmed highlighted');
+      matchNodes = []; matchIndex = 0;
+      matchIndicator.style.display = 'none';
+      cy.fit(undefined, 50);
+    }
+
+    searchInput.addEventListener('input', () => {
+      const q = searchInput.value.trim().toLowerCase();
+      if (!q) { clearSearch(); return; }
+      matchNodes = cy.nodes().filter(n => n.data('label').toLowerCase().includes(q));
+      matchIndex = 0;
+      if (matchNodes.length > 0) {
+        matchIndicator.style.display = 'inline';
+        matchIndicator.textContent = `${matchNodes.length} 个匹配`;
+        cy.elements().addClass('dimmed');
+        matchNodes.removeClass('dimmed').addClass('highlighted');
+        matchNodes.connectedEdges().removeClass('dimmed');
+      } else {
+        matchIndicator.style.display = 'inline';
+        matchIndicator.textContent = '无匹配';
+        cy.elements().removeClass('dimmed highlighted');
+      }
+    });
+
+    searchInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && matchNodes.length > 0) {
+        e.preventDefault();
+        matchIndex = (matchIndex + 1) % matchNodes.length;
+        const node = matchNodes[matchIndex];
+        cy.animate({ center: { eles: node }, zoom: 1.5 }, { duration: 500 });
+        matchIndicator.textContent = `${matchIndex + 1}/${matchNodes.length}`;
+      }
+      if (e.key === 'Escape') { searchInput.value = ''; clearSearch(); }
+    });
+
+    // === Particle Background System ===
+    if (!REDUCED_MOTION) {
+      const wrapper = document.getElementById('graph-wrapper');
+      const pCanvas = document.getElementById('particle-canvas');
+      const pCtx = pCanvas.getContext('2d');
+      pCanvas.width = wrapper.getBoundingClientRect().width;
+      pCanvas.height = wrapper.getBoundingClientRect().height;
+      window.addEventListener('resize', () => {
+        const r = wrapper.getBoundingClientRect();
+        pCanvas.width = r.width; pCanvas.height = r.height;
+      });
+
+      const PARTICLES = 80;
+      const particles = [];
+      for (let i = 0; i < PARTICLES; i++) {
+        particles.push({
+          x: Math.random() * pCanvas.width, y: Math.random() * pCanvas.height,
+          vx: (Math.random() - 0.5) * 0.5, vy: (Math.random() - 0.5) * 0.5,
+          size: Math.random() * 2 + 1, alpha: Math.random() * 0.4 + 0.1,
+        });
+      }
+
+      function getNodePositions() {
+        return cy.nodes().map(n => ({ x: n.renderedPosition().x, y: n.renderedPosition().y, type: n.data('type') }));
+      }
+
+      const nodeBaseSizes = new Map();
+      cy.nodes().forEach(n => {
+        nodeBaseSizes.set(n.id(), { w: n.style('width').value, h: n.style('height').value, phase: Math.random() * Math.PI * 2 });
+      });
+
+      let animFrame = 0;
+      function animateParticles() {
+        animFrame++;
+        pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
+        const nodes = getNodePositions();
+
+        if (animFrame % 2 === 0) {
+          cy.nodes().forEach(n => {
+            const base = nodeBaseSizes.get(n.id()); if (!base) return;
+            const breathe = 1 + Math.sin(animFrame * 0.02 + base.phase) * 0.06;
+            n.style({ width: base.w * breathe, height: base.h * breathe });
+          });
+          cy.edges().forEach(e => {
+            const t = animFrame * 0.015 + (e.data('id') || 'a').charCodeAt(0) * 0.1;
+            e.style({ 'line-opacity': 0.7 + Math.sin(t) * 0.3, width: 1 + Math.abs(Math.sin(t)) * 1.2 });
+          });
+        }
+
+        // Draw slowly flowing particles along edges — gentle, continuous, spaced
+        if (animFrame % 3 === 0) {
+          cy.edges().forEach(e => {
+            const src = e.source().renderedPosition(), tgt = e.target().renderedPosition();
+            // 3 flow dots per edge at different phases, drifting slowly
+            for (let d = 0; d < 3; d++) {
+              const offset = (d * 0.33 + animFrame * 0.0008 + (e.data('id')?.length || 0) * 0.01) % 1;
+              const mx = src.x + (tgt.x - src.x) * offset;
+              const my = src.y + (tgt.y - src.y) * offset;
+              pCtx.beginPath();
+              pCtx.arc(mx, my, 1.5, 0, Math.PI * 2);
+              // Soft glow — brighter at edges, dimmer in middle
+              const glow = Math.sin(offset * Math.PI) * 0.35 + 0.08;
+              pCtx.fillStyle = `rgba(99,102,241,${glow})`;
+              pCtx.fill();
+            }
+          });
+        }
+
+        for (const p of particles) {
+          let nearest = null, minDist = Infinity;
+          for (const n of nodes) {
+            const dx = n.x - p.x, dy = n.y - p.y, dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < minDist) { minDist = dist; nearest = n; }
+          }
+          if (nearest && minDist < 400) { p.vx += (nearest.x - p.x) * 0.0003; p.vy += (nearest.y - p.y) * 0.0003; }
+          p.vx *= 0.99; p.vy *= 0.99;
+          const spd = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+          if (spd > 1.5) { p.vx *= 1.5 / spd; p.vy *= 1.5 / spd; }
+          p.x += p.vx; p.y += p.vy;
+          if (p.x < 0) p.x = pCanvas.width; if (p.x > pCanvas.width) p.x = 0;
+          if (p.y < 0) p.y = pCanvas.height; if (p.y > pCanvas.height) p.y = 0;
+          pCtx.beginPath(); pCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          let color = '79,70,229';
+          if (nearest && minDist < 200) {
+            const accent = COLORS[nearest.type] || COLORS.other;
+            color = accent.replace('#','').replace(/(..)(..)(..)/, (_,r,g,b) => `${parseInt(r,16)},${parseInt(g,16)},${parseInt(b,16)}`);
+          }
+          pCtx.fillStyle = `rgba(${color},${p.alpha * (minDist < 300 ? 0.7 : 0.3)})`;
+          pCtx.fill();
+        }
+        requestAnimationFrame(animateParticles);
+      }
+      animateParticles();
+
+      // === Click FX ===
+      const fxCanvas = document.getElementById('fx-canvas');
+      const fxCtx = fxCanvas.getContext('2d');
+      fxCanvas.width = wrapper.getBoundingClientRect().width;
+      fxCanvas.height = wrapper.getBoundingClientRect().height;
+      const ripples = [], bursts = [];
+
+      function triggerClickFX(x, y, nodeColor) {
+        for (let i = 0; i < 3; i++) ripples.push({ x, y, radius: 10, maxRadius: 50 + i * 20, alpha: 0.8 - i * 0.2, color: nodeColor, delay: i * 60 });
+        for (let i = 0; i < 12; i++) {
+          const angle = (Math.PI * 2 / 12) * i + Math.random() * 0.5;
+          bursts.push({ x, y, vx: Math.cos(angle) * (2 + Math.random() * 4), vy: Math.sin(angle) * (2 + Math.random() * 4), life: 1.0, decay: 0.015 + Math.random() * 0.025, size: 2 + Math.random() * 3, color: nodeColor });
+        }
+      }
+
+      function animateFX() {
+        fxCtx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
+        for (let i = ripples.length - 1; i >= 0; i--) {
+          const r = ripples[i]; if (r.delay > 0) { r.delay--; continue; }
+          r.radius += 2.5; r.alpha -= 0.025;
+          if (r.alpha <= 0 || r.radius >= r.maxRadius) { ripples.splice(i,1); continue; }
+          fxCtx.beginPath(); fxCtx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
+          fxCtx.strokeStyle = r.color.replace('1)', `${r.alpha})`).replace('rgb', 'rgba');
+          fxCtx.lineWidth = 2 * r.alpha; fxCtx.stroke();
+        }
+        for (let i = bursts.length - 1; i >= 0; i--) {
+          const b = bursts[i]; b.x += b.vx; b.y += b.vy; b.vx *= 0.96; b.vy *= 0.96; b.life -= b.decay;
+          if (b.life <= 0) { bursts.splice(i,1); continue; }
+          fxCtx.beginPath(); fxCtx.arc(b.x, b.y, b.size, 0, Math.PI * 2);
+          fxCtx.fillStyle = b.color.replace('1)', `${b.life})`).replace('rgb', 'rgba'); fxCtx.fill();
+        }
+        if (ripples.length > 0 || bursts.length > 0) requestAnimationFrame(animateFX);
+      }
+
+      cy.on('tap', 'node', evt => {
+        const node = evt.target, pos = node.renderedPosition();
+        const type = node.data('type');
+        const color = (COLORS[type] || COLORS.other).replace('#','').replace(/(..)(..)(..)/,
+          (_,r,g,b) => `rgb(${parseInt(r,16)},${parseInt(g,16)},${parseInt(b,16)},1)`);
+        node.animate({ style: { width: node.style('width').value * 1.6, height: node.style('height').value * 1.6 }, duration: 150, easing: 'cubic-bezier(0.34,1.56,0.64,1)', complete: () => { node.animate({ style: { width: node.style('width').value / 1.6, height: node.style('height').value / 1.6 }, duration: 200, easing: 'cubic-bezier(0.34,1.56,0.64,1)' }); } });
+        triggerClickFX(pos.x, pos.y, color); animateFX();
+        const url = node.data('url'); if (url) setTimeout(() => { window.location.href = url; }, 350);
+      });
+    } else {
+      // Reduced motion
+      cy.on('tap', 'node', evt => { const url = evt.target.data('url'); if (url) window.location.href = url; });
+    }
+  });
+</script>
+{% endblock %}

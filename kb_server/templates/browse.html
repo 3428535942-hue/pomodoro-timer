@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}浏览 — {{ kb_title }}{% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.5rem">
+    <h2 style="font-size:1.4rem;font-weight:700;letter-spacing:-0.3px">知识库浏览器</h2>
+    <span style="color:var(--color-text-muted);font-size:0.85rem">{{ page_count }} 个页面</span>
+</div>
+
+{% if page_count == 0 %}
+<div class="empty-state">
+    <div class="illustration">🤖</div>
+    <h3>知识库还在饿肚子</h3>
+    <p>在 <code>kb/wiki/</code> 下创建 Markdown 文件，或丢资料到 <code>kb/raw/</code> 目录，AI 会自动收录整理。</p>
+</div>
+{% else %}
+<div class="bento-grid">
+    {% for dir_name, pages in groups.items() %}
+    <div class="card bento-item-wide">
+        <div class="card-icon">📁</div>
+        <h3>{{ dir_name }}/ <span style="font-weight:400;color:var(--color-text-muted)">{{ pages|length }} 页</span></h3>
+        <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.75rem">
+        {% for p in pages %}
+            <a href="/page/{{ p.url_path }}" class="btn btn-ghost" style="font-size:0.8rem;padding:0.35rem 0.75rem">
+                {{ p.title }}
+                <span class="badge badge-{{ p.page_type }}">{{ p.type_label }}</span>
+            </a>
+        {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

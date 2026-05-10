@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}{{ page.title }} — {{ kb_title }}{% endblock %}
+
+{% block content %}
+<div class="page-layout">
+    <!-- Sticky Sidebar -->
+    <aside class="page-sidebar">
+        <h4>导航</h4>
+        <ul>
+            <li><a href="/">← 返回浏览</a></li>
+            <li><a href="/search">🔍 搜索</a></li>
+            <li><a href="/graph">🗺️ 图谱</a></li>
+        </ul>
+
+        {% if page.backlinks %}
+        <h4 style="margin-top:1.5rem">反向链接 ({{ page.backlinks|length }})</h4>
+        <ul>
+        {% for bl in page.backlinks %}
+            <li><a href="/page/{{ bl }}" title="{{ bl }}">📄 {{ bl.split('/')[-1].replace('.md','') }}</a></li>
+        {% endfor %}
+        </ul>
+        {% endif %}
+
+        {% if page.wikilinks %}
+        <h4 style="margin-top:1.5rem">本页链接 ({{ page.wikilinks|length }})</h4>
+        <ul>
+        {% for target, resolved in page.resolved_links %}
+            <li><a href="/page/{{ resolved }}">{{ target }}</a></li>
+        {% endfor %}
+        </ul>
+        {% endif %}
+    </aside>
+
+    <!-- Content -->
+    <article class="page-content">
+        <small style="color:var(--color-text-muted)">
+            <span class="badge badge-{{ page.page_type }}">{{ page.type_label }}</span>
+            {{ page.rel_path }}
+        </small>
+        {% if page.summary %}
+            <p style="margin-top:0.75rem;padding:0.75rem 1rem;background:var(--color-accent-light);border-radius:8px;font-style:italic;color:var(--color-text-heading)">{{ page.summary }}</p>
+        {% endif %}
+        {{ html | safe }}
+    </article>
+</div>
+{% endblock %}

@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}上传视频 — {{ kb_title }}{% endblock %}
+
+{% block content %}
+<h2 style="font-size:1.4rem;font-weight:700;letter-spacing:-0.3px;margin-bottom:0.5rem">视频摄取</h2>
+<p style="color:var(--color-text-muted);margin-bottom:1.5rem">上传视频文件，AI 将自动提取音频、识别关键帧、生成带时间戳的知识点卡片。</p>
+
+<!-- Upload Zone -->
+<div id="upload-zone" class="upload-zone" onclick="document.getElementById('file-input').click()">
+    <div class="upload-icon">🎬</div>
+    <h3 style="font-weight:600;margin-bottom:0.25rem">拖拽视频到此处或点击上传</h3>
+    <p style="color:var(--color-text-muted);font-size:0.85rem">支持 MP4, MOV, AVI, MKV · 建议单视频 &lt; 90 分钟</p>
+    <input id="file-input" type="file" accept="video/*" style="display:none" onchange="handleFile(this.files[0])">
+</div>
+
+<!-- Progress -->
+<div id="progress-area" style="display:none;margin-top:2rem">
+    <div id="progress-steps" style="margin-bottom:1rem"></div>
+    <div class="skeleton" id="progress-bar" style="height:6px;width:100%;border-radius:3px"></div>
+    <p id="progress-text" style="text-align:center;color:var(--color-text-muted);font-size:0.8rem;margin-top:0.5rem"></p>
+</div>
+
+<!-- Results -->
+<div id="results-area" style="display:none;margin-top:2rem"></div>
+
+<script>
+const zone = document.getElementById('upload-zone');
+const progressArea = document.getElementById('progress-area');
+const resultsArea = document.getElementById('results-area');
+
+// Drag & drop
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+zone.addEventListener('drop', e => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+});
+
+async function handleFile(file) {
+    if (!file.type.startsWith('video/')) { alert('请选择视频文件'); return; }
+
+    progressArea.style.display = 'block';
+    resultsArea.style.display = 'none';
+
+    const steps = [
+        '[1/4] 上传中…',
+        '[2/4] 音频轨道提取中…',
+        '[3/4] 关键帧捕获中…',
+        '[4/4] AI 语义理解与向量化…',
+    ];
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        updateProgress(0, steps[0]);
+
+        const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+        if (!resp.ok) { throw new Error(`HTTP ${resp.status}: ${await resp.text()}`); }
+
+        const result = await resp.json();
+
+        // Simulate processing progress
+        for (let i = 1; i < steps.length; i++) {
+            await sleep(800);
+            updateProgress((i + 1) / steps.length * 100, steps[i]);
+        }
+
+        updateProgress(100, '处理完成！');
+        await sleep(500);
+
+        // Show results
+        showResults(result);
+
+    } catch (err) {
+        updateProgress(0, '');
+        document.getElementById('progress-text').textContent = '处理失败：' + err.message;
+        document.getElementById('progress-text').style.color = '#ef4444';
+    }
+}
+
+function updateProgress(pct, text) {
+    const bar = document.getElementById('progress-bar');
+    bar.style.width = pct + '%';
+    bar.style.background = pct >= 100 ?
+        'linear-gradient(90deg, #4f46e5, #7c3aed)' :
+        `linear-gradient(90deg, #4f46e5 ${pct}%, rgba(0,0,0,0.04) ${pct}%)`;
+    const steps = document.getElementById('progress-steps');
+    steps.innerHTML = text ? `<span style="font-size:0.85rem;font-weight:500">${text}</span>` : '';
+    document.getElementById('progress-text').textContent = pct >= 100 ? '✓ 完成' : `${Math.round(pct)}%`;
+}
+
+function showResults(result) {
+    if (!result.segments || !result.segments.length) {
+        resultsArea.innerHTML = '<div class="empty-state"><div class="illustration">📭</div><h3>未提取到内容</h3></div>';
+        resultsArea.style.display = 'block';
+        return;
+    }
+    let html = `<h3 style="margin-bottom:1rem">提取到 ${result.segments.length} 个知识点片段</h3><div class="bento-grid">`;
+    result.segments.forEach((seg, i) => {
+        html += `
+        <div class="card">
+            <div class="card-icon">🎯</div>
+            <h3>片段 ${i + 1}</h3>
+            <p style="font-size:0.8rem;color:var(--color-text-muted)">🕐 ${formatTime(seg.start)} - ${formatTime(seg.end)}</p>
+            <p style="margin-top:0.5rem;font-size:0.9rem">${seg.summary || seg.text?.substring(0, 120) + '…' || '(处理中)'}</p>
+            ${seg.keywords ? `<div style="margin-top:0.5rem;display:flex;gap:0.3rem;flex-wrap:wrap">${seg.keywords.map(k => `<span class="badge badge-atom">${k}</span>`).join('')}</div>` : ''}
+        </div>`;
+    });
+    html += '</div>';
+    resultsArea.innerHTML = html;
+    resultsArea.style.display = 'block';
+    progressArea.style.display = 'none';
+}
+
+function formatTime(s) { const m = Math.floor(s/60); const sec = Math.floor(s%60); return `${m}:${sec.toString().padStart(2,'0')}`; }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+</script>
+{% endblock %}

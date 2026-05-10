@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}搜索 — {{ kb_title }}{% endblock %}
+
+{% block content %}
+<h2 style="font-size:1.4rem;font-weight:700;letter-spacing:-0.3px;margin-bottom:1rem">搜索</h2>
+
+<form action="/search" method="get" style="margin-bottom:2rem">
+    <div style="display:flex;gap:0.5rem">
+        <input type="search" name="q" value="{{ query }}" placeholder="输入关键词检索知识库…" autofocus
+               style="flex:1;padding:0.75rem 1rem;border:1px solid var(--color-border);border-radius:24px;font-family:'Inter',sans-serif;font-size:1rem;outline:none;transition:all 200ms"
+               onfocus="this.style.borderColor='var(--color-accent)';this.style.boxShadow='0 0 0 3px var(--color-accent-glow)'"
+               onblur="this.style.borderColor='var(--color-border)';this.style.boxShadow='none'">
+        <button type="submit" class="btn btn-primary">搜索</button>
+    </div>
+</form>
+
+{% if query %}
+    {% if results %}
+        <p style="color:var(--color-text-muted);margin-bottom:1rem">{{ results|length }} 个结果</p>
+        <div class="search-results">
+        {% for r in results %}
+            <a href="/page/{{ r.path }}" style="text-decoration:none;color:inherit">
+            <div class="result-item">
+                <h4 style="color:var(--color-text-heading);margin-bottom:0.25rem">{{ r.title }}</h4>
+                <small style="color:var(--color-text-muted)">{{ r.path }} · 相关度 {{ r.score }}</small>
+                <p style="margin-top:0.5rem;font-size:0.9rem">{{ r.snippet | safe }}</p>
+            </div>
+            </a>
+        {% endfor %}
+        </div>
+    {% else %}
+        <div class="empty-state">
+            <div class="illustration">🔍</div>
+            <h3>未找到匹配 "{{ query }}"</h3>
+            <p>换个关键词试试，或在 <code>kb/wiki/</code> 下创建更多内容。</p>
+        </div>
+    {% endif %}
+{% endif %}
+{% endblock %}
